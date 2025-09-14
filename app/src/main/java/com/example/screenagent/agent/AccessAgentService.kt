@@ -142,7 +142,24 @@ class AccessAgentService : AccessibilityService() {
                 return@launch
             }
 
-            val type = (action["type"] as? String)?.lowercase(java.util.Locale.US)
+            Log.d("ScreenAgent", "doOneStep Action received: $action")
+            Log.d("ScreenAgent", "doOneStep Action type: ${action["type"]}")
+            Log.d("ScreenAgent", "doOneStep Action keys: ${action.keys}")
+
+            var type = (action["type"] as? String ?: (action["action"] as? String))?.trim()?.lowercase(java.util.Locale.US)
+            if (type.isNullOrBlank()) {
+                val hasText = (action.containsKey("text") || action.containsKey("value"))
+                val hasNode = (action.containsKey("node_id") || action.containsKey("nodeId"))
+                val hasUrl = action.containsKey("url")
+                type = when {
+                    hasText && hasNode -> "set_text"
+                    hasUrl -> "open_url"
+                    hasNode -> "tap"
+                    else -> null
+                }
+                Log.d("ScreenAgent", "doOneStep derived action type: $type from keys=${action.keys}")
+            }
+            Log.d("ScreenAgent", "doOneStep Action type (lowercase): $type")
             when (type) {
                 "tap" -> {
                     val id = action["node_id"] as? String
@@ -181,14 +198,23 @@ class AccessAgentService : AccessibilityService() {
                     } else hud.show("Planner reply missing node_id")
                 }
                 "set_text" -> {
-                    val id = action["node_id"] as? String
-                    val text = action["text"] as? String
+                    val id = (action["node_id"] ?: action["nodeId"]) as? String
+                    val text = (action["text"] ?: action["value"]) as? String
                     if (id != null && text != null) {
                         hud.show("Do: set_text $id")
+                        Log.d("ScreenAgent", "set_text: calling setTextSmart id=$id text='${text.take(30)}'")
+                        hud.show("Setting text…")
                         val typed = setTextSmart(id, text)
+                        scope.launch { kotlinx.coroutines.delay(5000); hud.show("Agent idle") }
+                        Log.d("ScreenAgent", "set_text: setTextSmart finished result=$typed")
                         hud.show(if (typed) "Text set ✓" else "Set text failed")
                         // Always try to press IME action afterwards
-                        pressImeAction()
+                        val pressed = pressImeActionIfAvailable()
+                        Log.d("ScreenAgent", "set_text: pressImeActionIfAvailable pressed=$pressed")
+                        if (!pressed) {
+                            // Fallback: try typing an explicit newline (Enter)
+                            typeWithOnscreenKeyboard("\n")
+                        }
                         // After local input, post the follow-up
                         kotlinx.coroutines.delay(500)
                         val newAff = dumpAffordances(currentRoot())
@@ -196,7 +222,10 @@ class AccessAgentService : AccessibilityService() {
                         val followReq = PlanRequest("mvp-1", newAff, newShot, transcriptText, false)
                         hud.show("Posting follow-up…")
                         postPlan(followReq)
-                    } else hud.show("Planner reply missing node_id/text")
+                    } else {
+                        Log.w("ScreenAgent", "Planner reply missing node_id/text. keys=${action.keys}")
+                        hud.show("Planner reply missing node_id/text")
+                    }
                 }
                 "open_url" -> {
                     val url = action["url"] as? String
@@ -208,7 +237,7 @@ class AccessAgentService : AccessibilityService() {
                         hud.show("Opened URL")
                     } else hud.show("Planner reply missing url")
                 }
-                else -> hud.show("Unsupported action")
+                else -> hud.show("Unsupported action: $type")
             }
             
             // Clear affordances after action
@@ -401,18 +430,40 @@ class AccessAgentService : AccessibilityService() {
                     Log.w("ScreenAgent", "System home screenshot capture failed")
                 }
                 
+                Log.d("ScreenAgent", "About to create PlanRequest and call webhook...")
+                
                 // Create request and call webhook
                 val req = PlanRequest("system-home-test", affordances, shot, transcriptText)
+                Log.d("ScreenAgent", "PlanRequest created, calling postPlan...")
                 
                 hud.show("Posting to planner…")
                 val resp = postPlan(req)
+                Log.d("ScreenAgent", "postPlan returned: ${if (resp != null) "response received" else "null response"}")
                 val action = resp?.action
                 if (action == null) {
                     hud.show("No action returned (is n8n running?)")
                     return@launch
                 }
 
-                when (action["type"]) {
+                Log.d("ScreenAgent", "Action received: $action")
+                Log.d("ScreenAgent", "Action type: ${action["type"]}")
+                Log.d("ScreenAgent", "Action keys: ${action.keys}")
+
+                var type = (action["type"] as? String ?: (action["action"] as? String))?.trim()?.lowercase(java.util.Locale.US)
+                if (type.isNullOrBlank()) {
+                    val hasText = (action.containsKey("text") || action.containsKey("value"))
+                    val hasNode = (action.containsKey("node_id") || action.containsKey("nodeId"))
+                    val hasUrl = action.containsKey("url")
+                    type = when {
+                        hasText && hasNode -> "set_text"
+                        hasUrl -> "open_url"
+                        hasNode -> "tap"
+                        else -> null
+                    }
+                    Log.d("ScreenAgent", "derived action type: $type from keys=${action.keys}")
+                }
+                Log.d("ScreenAgent", "Action type (lowercase): $type")
+                when (type) {
                     "tap" -> {
                         val id = action["node_id"] as? String
                         if (id != null) {
@@ -446,6 +497,59 @@ class AccessAgentService : AccessibilityService() {
                             }
                         } else hud.show("Planner reply missing node_id")
                     }
+                    "set_text" -> {
+                        val id = (action["node_id"] ?: action["nodeId"]) as? String
+                        val text = (action["text"] ?: action["value"]) as? String
+                        if (id != null && text != null) {
+                            hud.show("Do: set_text $id on home screen")
+                            Log.d("ScreenAgent", "home set_text: calling setTextSmart id=$id text='${text.take(30)}'")
+                            hud.show("Setting text…")
+                            val typed = setTextSmart(id, text)
+                            scope.launch { kotlinx.coroutines.delay(5000); hud.show("Agent idle") }
+                            Log.d("ScreenAgent", "home set_text: setTextSmart finished result=$typed")
+                            hud.show(if (typed) "Typed text ✓" else "Text input failed")
+                            // Press IME action (Enter/Search) to execute
+                            val pressed = pressImeActionIfAvailable()
+                            Log.d("ScreenAgent", "home set_text: pressImeActionIfAvailable pressed=$pressed")
+                            if (!pressed) {
+                                typeWithOnscreenKeyboard("\n")
+                            }
+                            
+                            // If task not complete, loop with same transcript
+                            var complete = resp?.isComplete == true
+                            var safety = 0
+                            while (!complete) {
+                                kotlinx.coroutines.delay(800)
+                                val newAff = dumpAffordances(currentRoot())
+                                val newShot = try { createAnnotatedScreenshotBase64(newAff) } catch (_: Throwable) { null }
+                                val followReq = PlanRequest("system-home-test", newAff, newShot, transcriptText, false)
+                                val follow = postPlan(followReq)
+                                complete = follow?.isComplete == true
+                                if (!complete) {
+                                    val nextAction = follow?.action
+                                    val nextType = (nextAction?.get("type") as? String)?.lowercase(java.util.Locale.US)
+                                    if (nextType == "tap") {
+                                        val nextId = nextAction?.get("node_id") as? String
+                                        hud.show("Do: tap $nextId on home screen")
+                                        val ok2 = tap(nextId ?: "")
+                                        hud.show(if (ok2) "Tapped $nextId ✓" else "Tap failed")
+                                    } else if (nextType == "set_text") {
+                                        val nextId = nextAction?.get("node_id") as? String
+                                        val nextText = nextAction?.get("text") as? String
+                                        if (nextId != null && nextText != null) {
+                                            val ok2 = setTextSmart(nextId, nextText)
+                                            hud.show(if (ok2) "Typed text ✓" else "Text input failed")
+                                        }
+                                    }
+                                }
+                                safety++
+                                if (safety % 10 == 0) Log.i("ScreenAgent", "Home follow-up loop iteration=$safety (waiting for isComplete=true)")
+                            }
+                        } else {
+                            Log.w("ScreenAgent", "home set_text: missing id/text. keys=${action.keys}")
+                            hud.show("Planner reply missing node_id/text")
+                        }
+                    }
                     "open_url" -> {
                         val url = action["url"] as? String
                         if (url != null) {
@@ -456,7 +560,7 @@ class AccessAgentService : AccessibilityService() {
                             hud.show("Opened URL")
                         } else hud.show("Planner reply missing url")
                     }
-                    else -> hud.show("Unsupported action")
+                    else -> hud.show("Unsupported action: $type")
                 }
                 
                 // Clear after action
@@ -678,39 +782,119 @@ class AccessAgentService : AccessibilityService() {
 
     // ====== Set text (smart): focus/activate field → select-all → setText → clipboard paste fallback
     private fun setTextSmart(nodeId: String, text: String): Boolean {
+        Log.d("ScreenAgent", "setTextSmart(start): nodeId=$nodeId text='${text.take(40)}' length=${text.length}")
+        // Show HUD regardless of which caller invoked this
+        hud.show("Setting text…")
+        scope.launch { kotlinx.coroutines.delay(5000); hud.show("Agent idle") }
+        // 0) Visible popup for user confirmation of attempt
+        try { android.widget.Toast.makeText(this, "Trying to set text", android.widget.Toast.LENGTH_SHORT).show() } catch (_: Throwable) {}
+
         // 1) Resolve target node
         val node: AccessibilityNodeInfo = nodeMap[nodeId] ?: run {
             Log.w("ScreenAgent", "setText: node_id=$nodeId not found in nodeMap. Known ids=${nodeMap.keys}")
             return false
         }
 
-        // Prefer an editable ancestor for focus/tap
-        var target: AccessibilityNodeInfo = node
-        var hops = 0
-        while (!target.isEditable && target.parent != null && hops < 5) {
-            Log.i("ScreenAgent", "setText: climb parent hop=${hops + 1} from=${target.className}")
-            target = target.parent!!
-            hops++
+        // Prefer a nearby EDITABLE node: first search descendants, then climb to parents
+        var target: AccessibilityNodeInfo = findEditableDescendant(node, 4) ?: run {
+            var cur: AccessibilityNodeInfo = node
+            var hops = 0
+            while (!cur.isEditable && cur.parent != null && hops < 5) {
+                Log.d("ScreenAgent", "setText: climb parent hop=${hops + 1} from=${cur.className}")
+                cur = cur.parent!!
+                // If this parent has an editable descendant, use it
+                val desc = findEditableDescendant(cur, 3)
+                if (desc != null) {
+                    cur = desc
+                    break
+                }
+                hops++
+            }
+            cur
         }
-        Log.i("ScreenAgent", "setText: target class=${target.className} editable=${target.isEditable}")
+        Log.d("ScreenAgent", "setText: initial target class=${target.className} editable=${target.isEditable}")
 
         // 2) Tap the field and ensure focus (bring up IME)
         tapCenter(target, 120)
-        android.os.SystemClock.sleep(1200)
+        android.os.SystemClock.sleep(300)
         target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         target.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
         if (!target.isFocused && target.isClickable) target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         try { target.refresh() } catch (_: Throwable) {}
-        android.os.SystemClock.sleep(350)
+        // Wait until keyboard is actually visible
+        val imeVisible = waitForKeyboard(2500)
+        Log.d("ScreenAgent", "setText: IME visible=$imeVisible")
 
-        // 3) Type using on-screen keyboard keys
-        var ok = typeWithOnscreenKeyboard(text)
-        if (!ok) {
-            // Fallback: clipboard + explicit Paste menu tap
-            ok = pasteViaContextMenu(target, text)
+        // After IME appears, the focused editable node might be a different instance
+        findFocusedEditableNode()?.let { focused ->
+            Log.d("ScreenAgent", "setText: switching to focused node class=${focused.className}")
+            target = focused
         }
-        Log.i("ScreenAgent", "setText: keyboard type result=$ok")
+
+        // If no text provided, treat as focus-only request (open IME and stop)
+        if (text.isEmpty()) {
+            Log.d("ScreenAgent", "setText: empty text → focus-only, no typing")
+            return true
+        }
+
+        // 3) First try ACTION_SET_TEXT (fast path when supported)
+        val setArgs = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        }
+        // 3) First try ACTION_SET_TEXT (fast path when supported)
+        val setOk = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setArgs)
+        Log.d("ScreenAgent", "setText: ACTION_SET_TEXT result=$setOk on ${target.className}")
+        var ok = setOk
+        if (ok) {
+            // Verify non-empty result when non-empty text was requested
+            android.os.SystemClock.sleep(150)
+            try { target.refresh() } catch (_: Throwable) {}
+            val now = target.text?.toString() ?: ""
+            if (text.isNotEmpty() && now.isEmpty()) {
+                Log.w("ScreenAgent", "setText: ACTION_SET_TEXT reported success but text is empty; will fallback to paste")
+                ok = false
+            }
+            if (ok) {
+                Log.d("ScreenAgent", "setText: field now='${now.take(40)}'")
+            }
+        }
+        if (!ok) {
+            Log.w("ScreenAgent", "setText: ACTION_SET_TEXT failed, trying direct clipboard paste")
+            // 4) Direct clipboard paste via ACTION_PASTE (if supported)
+            try {
+                ok = withTemporaryClipboard(text) {
+                    target.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                }
+                Log.d("ScreenAgent", "setText: ACTION_PASTE result=$ok")
+            } catch (_: Throwable) { }
+
+            if (!ok) {
+                // 5) Type using on-screen keyboard keys
+                ok = typeWithOnscreenKeyboard(text)
+                if (!ok) {
+                    // 6) Fallback: context-menu paste
+                    ok = pasteViaContextMenu(target, text)
+                }
+            }
+        }
+        Log.d("ScreenAgent", "setText: keyboard type result=$ok")
         return ok
+    }
+
+    // Removed IME commit path (reverted)
+
+    private fun findEditableDescendant(start: AccessibilityNodeInfo, maxDepth: Int): AccessibilityNodeInfo? {
+        val q: ArrayDeque<Pair<AccessibilityNodeInfo, Int>> = ArrayDeque()
+        q.add(Pair(start, 0))
+        while (q.isNotEmpty()) {
+            val (n, d) = q.removeFirst()
+            if (n.isEditable) return n
+            if (d >= maxDepth) continue
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { q.add(Pair(it, d + 1)) }
+            }
+        }
+        return null
     }
 
     private fun typeWithOnscreenKeyboard(text: String): Boolean {
@@ -729,7 +913,7 @@ class AccessAgentService : AccessibilityService() {
                 tapCenter(key, 120)
                 android.os.SystemClock.sleep(80)
             } else {
-                Log.w("ScreenAgent", "setText: key not found for '$ch'")
+                Log.d("ScreenAgent", "setText: key not found for '$ch'")
                 allOk = false
             }
         }
@@ -750,10 +934,13 @@ class AccessAgentService : AccessibilityService() {
                     val text = n.text?.toString()
                     val desc = n.contentDescription?.toString()
                     val cls = n.className?.toString()?.lowercase(java.util.Locale.US) ?: ""
+                    val viewId = try { n.viewIdResourceName } catch (_: Throwable) { null }
                     val matches = labels.any { lbl ->
                         (text != null && text.equals(lbl, true)) ||
                         (desc != null && desc.equals(lbl, true)) ||
-                        (lbl == "space" && (desc?.contains("space", true) == true || text?.contains("space", true) == true))
+                        (lbl == "space" && (desc?.contains("space", true) == true || text?.contains("space", true) == true)) ||
+                        (viewId != null && viewId.contains(lbl, true)) ||
+                        (viewId != null && viewId.contains("key", true))
                     }
                     if (matches && n.isVisibleToUser && (cls.contains("button") || cls.contains("image") || cls.contains("key") || cls.contains("view"))) {
                         return n
@@ -765,19 +952,49 @@ class AccessAgentService : AccessibilityService() {
         return null
     }
 
+    private fun findAffordanceIdByViewId(resourceId: String): String? {
+        // nodeMap is populated by the latest dumpAffordances call
+        return nodeMap.entries.firstOrNull { entry ->
+            try { entry.value.viewIdResourceName == resourceId } catch (_: Throwable) { false }
+        }?.key
+    }
+
+    private fun waitForKeyboard(timeoutMs: Long): Boolean {
+        val start = SystemClock.uptimeMillis()
+        while (SystemClock.uptimeMillis() - start < timeoutMs) {
+            val space = findKeyboardKey(listOf("space", "enter", "search"))
+            if (space != null) return true
+            android.os.SystemClock.sleep(100)
+        }
+        return false
+    }
+
     private fun pasteViaContextMenu(target: AccessibilityNodeInfo, text: String): Boolean {
         return try {
-            val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("a11y", text))
-            // Long-press to show context menu
-            tapCenter(target, 500)
-            android.os.SystemClock.sleep(300)
-            val pasteNode = findNodeByLabels(listOf("Paste", "PASTE"))
-            return if (pasteNode != null) {
-                tapCenter(pasteNode, 120)
-                true
-            } else false
+            withTemporaryClipboard(text) {
+                // Long-press to show context menu
+                tapCenter(target, 500)
+                android.os.SystemClock.sleep(300)
+                val pasteNode = findNodeByLabels(listOf("Paste", "PASTE"))
+                if (pasteNode != null) {
+                    tapCenter(pasteNode, 120)
+                    true
+                } else false
+            }
         } catch (_: Throwable) { false }
+    }
+
+    private inline fun withTemporaryClipboard(value: String, block: () -> Boolean): Boolean {
+        val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        val original = try { cm.primaryClip } catch (_: Throwable) { null }
+        cm.setPrimaryClip(ClipData.newPlainText("a11y", value))
+        return try {
+            block()
+        } finally {
+            if (original != null) {
+                try { cm.setPrimaryClip(original) } catch (_: Throwable) {}
+            }
+        }
     }
 
     private fun findNodeByLabels(labels: List<String>): AccessibilityNodeInfo? {
@@ -801,17 +1018,21 @@ class AccessAgentService : AccessibilityService() {
         return null
     }
 
-    private fun pressImeAction() {
+    private fun pressImeActionIfAvailable(): Boolean {
         // Try to find common IME action buttons and tap them
         val candidates = listOf("enter", "search", "go", "done", "send", "↵")
         val node = findKeyboardKey(candidates)
         if (node != null) {
             tapCenter(node, 120)
-        } else {
-            // As a fallback, try to find a view labeled with Search/Enter in the window tree
-            val alt = findNodeByLabels(listOf("Search", "Enter", "Go", "Done", "Send"))
-            if (alt != null) tapCenter(alt, 120)
+            return true
         }
+        // As a fallback, try to find a view labeled with Search/Enter in the window tree
+        val alt = findNodeByLabels(listOf("Search", "Enter", "Go", "Done", "Send"))
+        if (alt != null) {
+            tapCenter(alt, 120)
+            return true
+        }
+        return false
     }
 
     private fun findFocusedEditableNode(): AccessibilityNodeInfo? {
@@ -830,15 +1051,15 @@ class AccessAgentService : AccessibilityService() {
         return fallback
     }
 
-    // ====== Planner POST (kept for when backend is ready)
-    private fun 
-    postPlan(body: PlanRequest): PlanResponse? = runBlocking(Dispatchers.IO) {
+    // ====== Planner POST (suspend, always on IO dispatcher)
+    private suspend fun postPlan(body: PlanRequest): PlanResponse? = withContext(Dispatchers.IO) {
         try {
             val url = URL("https://suhani22.app.n8n.cloud/webhook/c54d4207-c2f5-485f-892b-95094e6c30ea")
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json, */*")
                 // Larger timeouts to handle big screenshots and n8n processing
                 connectTimeout = 30000
                 readTimeout = 60000
@@ -870,10 +1091,17 @@ class AccessAgentService : AccessibilityService() {
             // Serialize JSON and post
             val jsonString = json.toString()
             val bytes = jsonString.toByteArray()
-            conn.outputStream.use { it.write(bytes) }
+            Log.d("ScreenAgent", "POST n8n: payload ${bytes.size} bytes, affordances=${body.affordances.size}, hasScreenshot=${body.screenshot_b64 != null}")
+            conn.outputStream.use {
+                it.write(bytes)
+                it.flush()
+            }
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else (conn.errorStream ?: conn.inputStream)
             val resp = stream.bufferedReader().readText()
+            
+            Log.d("ScreenAgent", "Raw n8n response code: $code")
+            Log.d("ScreenAgent", "Raw n8n response body: $resp")
             
             // Parse response that may be an array, or object, possibly wrapped in output_json and/or output
             var rootAny: Any = try { org.json.JSONTokener(resp).nextValue() } catch (_: Throwable) { JSONObject(resp) }
@@ -905,7 +1133,12 @@ class AccessAgentService : AccessibilityService() {
                 else -> rootObj
             }
 
+            Log.d("ScreenAgent", "payloadObj: $payloadObj")
+            Log.d("ScreenAgent", "payloadObj has action: ${payloadObj.has("action")}")
+            
             val actionSource = if (payloadObj.has("action")) payloadObj.getJSONObject("action") else payloadObj
+            Log.d("ScreenAgent", "actionSource: $actionSource")
+            
             val isComplete = when {
                 rootObj.has("isComplete") -> rootObj.optBoolean("isComplete", false)
                 payloadObj.has("isComplete") -> payloadObj.optBoolean("isComplete", false)
@@ -913,14 +1146,29 @@ class AccessAgentService : AccessibilityService() {
             }
 
             val actionObj = actionSource
+            Log.d("ScreenAgent", "Final actionObj: $actionObj")
+            Log.d("ScreenAgent", "actionObj has type: ${actionObj.has("type")}")
+            if (actionObj.has("type")) {
+                Log.d("ScreenAgent", "actionObj type value: ${actionObj.getString("type")}")
+            }
 
             // Manual conversion to Map (Android's JSONObject has no toMap())
             val map = mutableMapOf<String, Any?>()
             // Normalize schema per your spec: top-level may directly be {type, node_id|text|url, isComplete}
             if (actionObj.has("type")) map["type"] = actionObj.getString("type")
             if (actionObj.has("node_id")) map["node_id"] = actionObj.getString("node_id")
+            // Support camelCase key from n8n: nodeId
+            if (actionObj.has("nodeId")) {
+                val nid = actionObj.getString("nodeId")
+                map["node_id"] = nid
+                map["nodeId"] = nid
+            }
             if (actionObj.has("text")) map["text"] = actionObj.getString("text")
+            // Some flows may use empty string to signal just focusing/opening IME
+            if (!actionObj.has("text") && actionObj.has("value")) map["text"] = actionObj.optString("value", "")
             if (actionObj.has("url")) map["url"] = actionObj.getString("url")
+
+            Log.d("ScreenAgent", "Final action map: $map")
 
             PlanResponse(action = map, isComplete = isComplete)
         } catch (e: Exception) {

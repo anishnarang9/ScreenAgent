@@ -24,8 +24,10 @@
 
     <Button
         android:id="@+id/btnHoldToSpeak"
-        android:text="Hold to Speak (transcribe + send)"
+        android:text="Hold to Speak"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"/>
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:backgroundTint="#4CAF50"/>
 
 </LinearLayout>

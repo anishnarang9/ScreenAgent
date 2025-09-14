@@ -40,6 +40,7 @@ class HomeActivity : AppCompatActivity() {
             insets
         }
 
+        // Button to go to home screen and trigger webhook
         findViewById<Button>(R.id.btnGoHomeAndTrigger).setOnClickListener {
             if (!isAccessibilityEnabled()) {
                 openAccessibilitySettings()
@@ -58,6 +59,23 @@ class HomeActivity : AppCompatActivity() {
             }
         }
 
+        // Hold-to-speak button for voice commands
+        findViewById<Button>(R.id.btnHoldToSpeak).setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    if (ensureAudioPermission()) {
+                        startListening()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    stopListening()
+                    true
+                }
+                else -> false
+            }
+        }
+
         // Prepare speech recognizer
         if (SpeechRecognizer.isRecognitionAvailable(this)) {
             speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
@@ -67,7 +85,10 @@ class HomeActivity : AppCompatActivity() {
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {}
-                override fun onError(error: Int) { isListening = false }
+                override fun onError(error: Int) { 
+                    isListening = false
+                    Toast.makeText(this@HomeActivity, "Speech recognition error: $error", Toast.LENGTH_SHORT).show()
+                }
                 override fun onPartialResults(partialResults: Bundle?) {}
                 override fun onEvent(eventType: Int, params: Bundle?) {}
                 override fun onResults(results: Bundle?) {
@@ -96,29 +117,19 @@ class HomeActivity : AppCompatActivity() {
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             }
         }
+    }
 
-        val speakBtn = findViewById<Button>(R.id.btnHoldToSpeak)
-        speakBtn.setOnTouchListener { v: View, event: MotionEvent ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    if (ensureAudioPermission()) {
-                        if (!isListening) {
-                            speechRecognizer?.startListening(speechIntent)
-                            isListening = true
-                            Toast.makeText(this, "Listening... release to stop", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                    true
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (isListening) {
-                        speechRecognizer?.stopListening()
-                        isListening = false
-                    }
-                    true
-                }
-                else -> false
-            }
+    private fun startListening() {
+        if (!isListening && speechRecognizer != null) {
+            isListening = true
+            speechRecognizer?.startListening(speechIntent)
+            Toast.makeText(this, "Listening...", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun stopListening() {
+        if (isListening) {
+            speechRecognizer?.stopListening()
         }
     }
 
