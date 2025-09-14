@@ -15,8 +15,13 @@ import java.util.concurrent.TimeUnit
 class Screenshotter(private val ctx: Context) {
 
     fun captureBase64(): String? {
+        val bmp = captureBitmap() ?: return null
+        return convertBitmapToBase64(bmp)
+    }
+
+    fun captureBitmap(): Bitmap? {
         return try {
-            Log.d("ScreenAgent", "Attempting to capture screenshot...")
+            Log.d("ScreenAgent", "Attempting to capture screenshot (bitmap)...")
 
             // Method 1: Try using AccessibilityService.takeScreenshot (API 30+)
             if (ctx is AccessibilityService && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -54,7 +59,7 @@ class Screenshotter(private val ctx: Context) {
                     if (latch.await(5, TimeUnit.SECONDS)) {
                         if (screenshotResultBitmap != null) {
                             Log.d("ScreenAgent", "Screenshot captured using AccessibilityService.takeScreenshot")
-                            return convertBitmapToBase64(screenshotResultBitmap!!)
+                            return screenshotResultBitmap
                         } else {
                             Log.w("ScreenAgent", "Screenshot callback completed but bitmap is null")
                         }
@@ -80,7 +85,7 @@ class Screenshotter(private val ctx: Context) {
                 // Fill with a test pattern so it's obvious when fallbacks are used
                 testBitmap.eraseColor(android.graphics.Color.RED)
                 Log.w("ScreenAgent", "Using test pattern (screenshot methods failed)")
-                return convertBitmapToBase64(testBitmap)
+                return testBitmap
             } catch (e: Exception) {
                 Log.e("ScreenAgent", "Test pattern fallback failed", e)
             }
@@ -93,7 +98,7 @@ class Screenshotter(private val ctx: Context) {
         }
     }
 
-    private fun convertBitmapToBase64(bitmap: Bitmap): String {
+    fun convertBitmapToBase64(bitmap: Bitmap): String {
         val baos = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
         val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)

@@ -22,4 +22,10 @@
         android:layout_height="wrap_content"
         android:layout_marginBottom="12dp"/>
 
+    <Button
+        android:id="@+id/btnHoldToSpeak"
+        android:text="Hold to Speak (transcribe + send)"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"/>
+
 </LinearLayout>
